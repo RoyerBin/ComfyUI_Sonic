@@ -25,23 +25,10 @@ MAX_SEED = np.iinfo(np.int32).max
 current_node_path = os.path.dirname(os.path.abspath(__file__))
 
 
-# Auto-selección de GPU disponible
-def auto_select_gpu():
-    if not torch.cuda.is_available():
-        print("No GPU detected. Running on CPU.")
-        return "cpu"
-    min_mem = None
-    best_gpu = 0
-    for i in range(torch.cuda.device_count()):
-        mem_free, mem_total = torch.cuda.mem_get_info(i)
-        print(f"GPU {i}: {mem_free // (1024**2)}MB free / {mem_total // (1024**2)}MB total")
-        if (min_mem is None) or (mem_free > min_mem):
-            min_mem = mem_free
-            best_gpu = i
-    print(f"Auto-selected GPU: {best_gpu}")
-    return f"cuda:{best_gpu}"
-
-device = auto_select_gpu()
+device = torch.device(
+    "cuda:0") if torch.cuda.is_available() else torch.device(
+    "mps") if torch.backends.mps.is_available() else torch.device(
+    "cpu")
 
 # add checkpoints dir
 SONIC_weigths_path = os.path.join(folder_paths.models_dir, "sonic")
@@ -100,12 +87,8 @@ class SONICLoader:
             subfolder="scheduler")
 
         unet_config_file=os.path.join(svd_repo, "unet")
-        unet = convert_cf2diffuser(model.model, unet_config_file, weight_dtype)
-
-        if torch.cuda.device_count() > 1:
-            print(f"Usando {torch.cuda.device_count()} GPUs con DataParallel.")
-            unet = torch.nn.DataParallel(unet)
-
+        unet=convert_cf2diffuser(model.model,unet_config_file,weight_dtype)
+        unet = unet.to("cuda:1")
         vae_config=os.path.join(svd_repo, "vae/config.json")
         vae_config=OmegaConf.load(vae_config)
         # unet = UNetSpatioTemporalConditionModel.from_pretrained(

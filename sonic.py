@@ -10,24 +10,6 @@ from .src.models.base.unet_spatio_temporal_condition import  add_ip_adapters
 from .src.pipelines.pipeline_sonic import SonicPipeline
 from .src.utils.RIFE.RIFE_HDv3 import RIFEModel
 
-# Auto-selección de GPU disponible
-def auto_select_gpu():
-    if not torch.cuda.is_available():
-        print("No GPU detected. Running on CPU.")
-        return "cpu"
-    min_mem = None
-    best_gpu = 0
-    for i in range(torch.cuda.device_count()):
-        mem_free, mem_total = torch.cuda.mem_get_info(i)
-        print(f"GPU {i}: {mem_free // (1024**2)}MB free / {mem_total // (1024**2)}MB total")
-        if (min_mem is None) or (mem_free > min_mem):
-            min_mem = mem_free
-            best_gpu = i
-    print(f"Auto-selected GPU: {best_gpu}")
-    return f"cuda:{best_gpu}"
-
-device = auto_select_gpu()
-
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -199,8 +181,8 @@ def test(
 
 
 class Sonic():
-
-    def __init__(self,
+   
+    def __init__(self, 
                  device,
                  weight_dtype,
                  vae_config,
@@ -209,58 +191,35 @@ class Sonic():
                  flownet_ckpt,
                  sonic_unet,
                  use_interframe,
-                 ip_audio_scale):
-
+                 ip_audio_scale,
+                 ):
         self.use_interframe = use_interframe
-
-        # Añadimos los IP Adapters correctamente según si estamos en DataParallel o no
-        if isinstance(unet, torch.nn.DataParallel):
-            add_ip_adapters(unet.module, [32], [ip_audio_scale])
-        else:
-            add_ip_adapters(unet, [32], [ip_audio_scale])
-
-        # Cargamos los pesos del modelo
+        #config.use_interframe = enable_interpolate_frame
+        add_ip_adapters(unet, [32], [ip_audio_scale])
         sonic_dict = torch.load(sonic_unet, map_location="cpu")
-        if isinstance(unet, torch.nn.DataParallel):
-            unet.module.load_state_dict(sonic_dict, strict=True)
-        else:
-            unet.load_state_dict(sonic_dict, strict=True)
-
-        # Verificación de qué GPUs estamos usando
-        if isinstance(unet, torch.nn.DataParallel):
-            print(f"Usando múltiples GPUs con {torch.cuda.device_count()} dispositivos.")
-            print(f"GPU utilizada: {unet.device_ids}")
-        else:
-            print("Usando una sola GPU.")
-
+        unet.load_state_dict(sonic_dict,strict=True,)
         del sonic_dict
         gc.collect()
         torch.cuda.empty_cache()
 
-        # Si se va a usar interframe, cargamos el RIFE
         if self.use_interframe:
             rife = RIFEModel(device=device)
             rife.load_model(flownet_ckpt)
             self.rife = rife
 
-        # Movemos el modelo al dtype correcto
-        if isinstance(unet, torch.nn.DataParallel):
-            unet.module.to(weight_dtype)
-            pipe_unet = unet.module  # Sacamos el modelo puro para el pipeline
-        else:
-            unet.to(weight_dtype)
-            pipe_unet = unet
+        #vae.to(weight_dtype)
+        unet.to(weight_dtype)
 
-        # Creamos el pipeline limpio
         pipe = SonicPipeline(
-            unet=pipe_unet,
+            unet=unet,
+            #vae=vae,
             scheduler=val_noise_scheduler,
             vae_config=vae_config,
         )
-
         self.pipe = pipe.to(dtype=weight_dtype)
         self.device = device
         print('init done')
+
 
     @torch.no_grad()
     def process(self,
@@ -276,19 +235,20 @@ class Sonic():
                 inference_steps=25,
                 dynamic_scale=1.0,
                 seed=None):
-
-        # Semilla reproducible
+        
+        # specific parameters
         if seed:
             config.seed = seed
 
         config.num_inference_steps = inference_steps
         config.motion_bucket_scale = dynamic_scale
         seed_everything(config.seed)
-
+       
         height, width = test_data['ref_img'].shape[-2:]
-
+        #self.pipe.enable_model_cpu_offload #太慢，没意义
         self.pipe.to(self.device)
-
+        
+        
         video = test(
             self.pipe,
             config,
@@ -303,21 +263,21 @@ class Sonic():
             img_latent=img_latent,
             vae=vae,
             device=self.device
-        )
+            )
 
-        # Interpolación de frames si se usa interframe
         if self.use_interframe:
             rife = self.rife
             out = video.to(self.device)
             results = []
             video_len = out.shape[2]
-            for idx in tqdm(range(video_len - 1), ncols=0):
+            for idx in tqdm(range(video_len-1), ncols=0):
                 I1 = out[:, :, idx]
-                I2 = out[:, :, idx + 1]
+                I2 = out[:, :, idx+1]
                 middle = rife.inference(I1, I2).clamp(0, 1).detach()
                 results.append(out[:, :, idx])
                 results.append(middle)
-            results.append(out[:, :, video_len - 1])
+            results.append(out[:, :, video_len-1])
             video = torch.stack(results, 2).cpu()
-
+         
         return video
+        
