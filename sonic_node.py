@@ -100,7 +100,12 @@ class SONICLoader:
             subfolder="scheduler")
 
         unet_config_file=os.path.join(svd_repo, "unet")
-        unet=convert_cf2diffuser(model.model,unet_config_file,weight_dtype)
+        unet = convert_cf2diffuser(model.model, unet_config_file, weight_dtype)
+
+        if torch.cuda.device_count() > 1:
+            print(f"Usando {torch.cuda.device_count()} GPUs con DataParallel.")
+            unet = torch.nn.DataParallel(unet)
+
         vae_config=os.path.join(svd_repo, "vae/config.json")
         vae_config=OmegaConf.load(vae_config)
         # unet = UNetSpatioTemporalConditionModel.from_pretrained(
